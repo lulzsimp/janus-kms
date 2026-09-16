@@ -1,0 +1,4 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "LSM6DSOTR") (type "KiCad") (uri "${KIPRJMOD}/LSM6DSOTR/KiCADv6/2026-09-12_11-15-52.kicad_sym") (options "") (descr ""))
+)
