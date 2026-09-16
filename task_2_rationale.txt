@@ -1,0 +1,152 @@
+Parafoil 6-DOF Guidance Rationale (Plain Text)
+
+1) Purpose
+
+This implementation simulates a parafoil descending from altitude and steering toward a landing target at (0, 0, 0). The objective is to combine:
+- A nonlinear 6-DOF physics model (the “plant”),
+- A simple closed-loop steering law (the “guidance/controller”),
+- A stable numerical integrator (RK4) to propagate motion in time.
+
+The design choice is intentional: keep guidance simple and robust, while letting the nonlinear plant capture the dynamics.
+
+2) What is implemented
+
+The code models a 12-state system:
+[x, y, z, phi, theta, psi, u, v, w, p, q, r]
+
+where:
+- x, y, z are inertial position coordinates,
+- phi, theta, psi are roll, pitch, yaw,
+- u, v, w are body-frame translational velocities,
+- p, q, r are body-frame angular rates.
+
+Coordinate convention:
+- inertial x = north, y = east, z = down
+- launch at z = -700 means 700 m above landing plane
+- landing plane is z = 0
+
+Major components:
+- body-to-inertial and inertial-to-body kinematics,
+- aerodynamic lift/drag and moments from coefficient formulas,
+- rigid-body translational and rotational equations,
+- Runge-Kutta 4th-order time stepping,
+- proportional heading guidance with:
+  - command saturation,
+  - deadband,
+  - actuator-rate limiting,
+  - terminal command decay near target.
+
+3) Why this guidance algorithm
+
+The chosen steering method is closed-loop proportional pursuit:
+- Compute bearing from current position to target,
+- Compute current track direction from inertial velocity,
+- Heading error = wrapped difference,
+- Brake command = -Kp * heading_error,
+- Clip to allowable command limits.
+
+This is not graph pathfinding (not A*, Dijkstra, RRT, or waypoint optimization). There is no map search. It is reactive guidance: repeatedly point motion toward target and correct error.
+
+Reason this is appropriate:
+- Fast to implement and tune,
+- Stable enough for a first working prototype,
+- Consistent with available model fidelity and time constraints,
+- Easier to debug than a full optimal-control stack.
+
+4) PID vs this implementation
+
+Current controller is P-control only, not full PID.
+
+Current law:
+command = Kp * error (with sign convention and clipping)
+
+A full PID would be:
+command = Kp*error + Ki*integral(error) + Kd*derivative(error)
+
+Why P was used:
+- Simpler and more robust for initial nonlinear flight simulation,
+- Avoids immediate integral windup issues under actuator saturation,
+- Works well as baseline for homing behavior.
+
+If future oscillation is observed, PD is the next practical upgrade.
+
+5) RK4 vs controller (important distinction)
+
+Controller and RK4 are different layers:
+- Controller decides “what command to apply now”.
+- Dynamics computes state derivatives for that command.
+- RK4 numerically integrates those derivatives over dt to get next state.
+
+RK4 does NOT control the vehicle. It only advances the physics accurately.
+
+RK4 update:
+k1 = f(x, u)
+k2 = f(x + 0.5*dt*k1, u)
+k3 = f(x + 0.5*dt*k2, u)
+k4 = f(x + dt*k3, u)
+x_next = x + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
+
+6) Dynamics model logic
+
+Per physics substep:
+1. Read state and angular rates.
+2. Rotate velocity between frames.
+3. Subtract wind to get air-relative velocity.
+4. Compute airspeed and angle of attack.
+5. Compute CL and CD.
+6. Compute aerodynamic force.
+7. Rotate gravity into body frame.
+8. Compute aerodynamic moments (roll/pitch/yaw).
+9. Compute translational acceleration:
+   Vdot = F/m - omega x V
+10. Compute angular acceleration:
+   omegadot = I^-1 * (M - omega x I*omega)
+11. Compute Euler angle rates.
+12. Return full state derivative.
+
+7) Guidance timing and command handling
+
+Two time scales are used:
+- PHYSICS_DT (small, e.g., 0.02 s) for integration fidelity,
+- GUIDANCE_DT (larger, e.g., 0.5 s) for control updates.
+
+Between guidance updates, command is held.
+Before applying, desired command is:
+- deadbanded near zero error,
+- saturated to max brake range,
+- rate-limited so actuator does not jump unrealistically.
+
+Near target (inside GOAL_RADIUS), terminal behavior decays command to reduce rapid oscillatory steering.
+
+8) Assumptions and limitations
+
+Important assumptions:
+- Inertia matrix values are placeholders (engineering assumptions).
+- Some geometry/aero terms are direct carryover from provided material.
+- No full actuator dynamics beyond simple rate limit.
+- No obstacle model, no terrain map, no wind field variation.
+
+Implication:
+The simulator is a solid prototype, not yet a fully calibrated flight-validated model.
+
+9) Required calibration and validation next
+
+Most important next tasks:
+1. Replace assumed inertia terms with measured/identified values.
+2. Verify steering sign convention (positive command turn direction).
+3. Check dimensional consistency of aerodynamic force/moment equations.
+4. Validate sink rate and turn radius against reference behavior.
+5. Tune Kp, max command, and rate limit over multiple initial conditions.
+6. Run Monte Carlo starts (different launch positions/seeds).
+
+10) Optional extension (energy management)
+
+If parafoil has excess altitude relative to remaining horizontal distance:
+predicted_range = altitude * glide_ratio
+
+Then add a holding-turn mode to burn altitude before final approach.
+This should be added only after baseline model/sign/tuning are validated, otherwise it may hide model errors.
+
+11) Final concise description
+
+This system is a closed-loop proportional pursuit guidance controller driving a nonlinear 6-DOF parafoil dynamics model, integrated with RK4. The controller computes heading error to target, converts it into bounded/rate-limited differential braking, and updates repeatedly until touchdown or timeout.
